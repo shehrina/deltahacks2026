@@ -99,11 +99,13 @@ wss.on("connection", (ws) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`✅ Server running on: http://localhost:${PORT}`);
-  console.log(`✅ WebSocket endpoint: ws://localhost:${PORT}`);
-  console.log(`✅ POST pitch here:     http://localhost:${PORT}/pitch`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`✅ Server running on: http://0.0.0.0:${PORT}`);
+  console.log(`✅ WebSocket endpoint: ws://0.0.0.0:${PORT}`);
+  console.log(`✅ POST pitch here:     http://0.0.0.0:${PORT}/pitch`);
+  console.log(`➡️  IMPORTANT: from phone use ws://<YOUR_LAPTOP_IP>:${PORT}`);
 });
+
 
 
 

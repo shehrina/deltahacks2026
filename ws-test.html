@@ -7,7 +7,7 @@
 
     <script>
         const out = document.getElementById("out");
-        const ws = new WebSocket("ws://localhost:8080");
+        const ws = new WebSocket(`ws://${location.hostname}:8080`);
 
         ws.onopen = () => (out.textContent = "✅ connected\n");
         ws.onmessage = (e) => (out.textContent += "📩 " + e.data + "\n");
