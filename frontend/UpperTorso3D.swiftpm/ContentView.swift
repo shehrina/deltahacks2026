@@ -20,6 +20,17 @@ struct ContentView: View {
     private var modelRotationY: Float { dragRotationY }
     private var modelRotationZ: Float { sensorRoll }
     
+    // Posture detection: compare upper (neck) vs lower (back) pitch
+    private var isGoodPosture: Bool {
+        let angleDifference = abs(postureVM.upperPitch - postureVM.lowerPitch)
+        let isGood = angleDifference <= 15.0  // Good if within 15 degrees
+        
+        // Debug output
+        print("🔍 Upper: \(String(format: "%.1f", postureVM.upperPitch))°, Lower: \(String(format: "%.1f", postureVM.lowerPitch))°, Diff: \(String(format: "%.1f", angleDifference))°, Status: \(isGood ? "GREEN ✅" : "RED ❌")")
+        
+        return isGood
+    }
+    
     var body: some View {
         mainContent
             .onAppear(perform: handleAppear)
@@ -58,19 +69,35 @@ struct ContentView: View {
                     .padding(.horizontal, 16)
                     .padding(.bottom, 20)
             }
+            
         }
     }
     
     private var headerView: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("PRESSUREPOINT")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.8))
-                    .tracking(4)
-                Text("Welcome!")
-                    .font(.system(size: 28, weight: .thin))
-                    .foregroundColor(.white)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("PRESSUREPOINT")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                        .tracking(4)
+                    
+                    // HUGE STATUS - You can't miss this!
+                    Text(isGoodPosture ? "GOOD ✓" : "BAD ✗")
+                        .font(.system(size: 40, weight: .black))
+                        .foregroundColor(isGoodPosture ? .green : .red)
+                    
+                    // Raw sensor values
+                    Text("Upper: \(String(format: "%.1f", postureVM.upperPitch))°")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                    Text("Lower: \(String(format: "%.1f", postureVM.lowerPitch))°")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                    Text("Diff: \(String(format: "%.1f", abs(postureVM.upperPitch - postureVM.lowerPitch)))°")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(isGoodPosture ? .green : .red)
+                }
             }
             Spacer()
             
@@ -96,12 +123,16 @@ struct ContentView: View {
     }
     
     private var sceneView: some View {
-        TorsoSceneView(
-            modelRotationX: modelRotationX,
-            modelRotationY: modelRotationY,
-            modelRotationZ: modelRotationZ,
-            zoom: $zoom
-        )
+        ZStack {
+            TorsoSceneView(
+                modelRotationX: modelRotationX,
+                modelRotationY: modelRotationY,
+                modelRotationZ: modelRotationZ,
+                zoom: $zoom,
+                isGoodPosture: isGoodPosture
+            )
+            
+        }
         .clipShape(RoundedRectangle(cornerRadius: 24))
         .padding(.horizontal, 16)
         .gesture(
@@ -187,6 +218,7 @@ struct TorsoSceneView: UIViewRepresentable {
     var modelRotationY: Float  // Yaw (drag)
     var modelRotationZ: Float  // Roll (sensor)
     @Binding var zoom: CGFloat
+    var isGoodPosture: Bool  // For glowing back indicator
     
     func makeUIView(context: Context) -> SCNView {
         let sceneView = SCNView()
@@ -209,6 +241,7 @@ struct TorsoSceneView: UIViewRepresentable {
         if let cameraNode = uiView.scene?.rootNode.childNode(withName: "camera", recursively: false) {
             cameraNode.position.z = Float(2.5 / zoom)
         }
+        
     }
     
     func createScene() -> SCNScene {
@@ -561,5 +594,29 @@ struct TorsoSceneView: UIViewRepresentable {
         }
         
         return torsoNode
+    }
+    
+    // MARK: - Back Glow Indicator
+    func createBackGlow() -> SCNNode {
+        let backGlowNode = SCNNode()
+        backGlowNode.name = "backGlow"
+        
+        // Glowing aura around the torso (visible from all angles)
+        let glowGeometry = SCNBox(width: 1.0, height: 1.4, length: 0.08, chamferRadius: 0.12)
+        
+        let glowMaterial = SCNMaterial()
+        glowMaterial.emission.contents = UIColor.green // Start with green
+        glowMaterial.diffuse.contents = UIColor.green.withAlphaComponent(0.2)
+        glowMaterial.lightingModel = .constant
+        glowMaterial.transparency = 0.85  // More visible
+        glowMaterial.isDoubleSided = true  // Visible from both sides
+        
+        glowGeometry.materials = [glowMaterial]
+        backGlowNode.geometry = glowGeometry
+        
+        // Position behind the upper back
+        backGlowNode.position = SCNVector3(0, 0.5, -0.25)
+        
+        return backGlowNode
     }
 }
