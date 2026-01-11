@@ -1,16 +1,11 @@
 // server.js
-// Node backend that accepts IMU samples from TWO Arduino boards:
-//  - Arduino #1 posts to POST /imu  -> logs to telemetry.ndjson
-//  - Arduino #2 posts to POST /imu2 -> logs to telemetry2.ndjson
-// It also broadcasts every sample over WebSocket (ws://localhost:8080)
-// and tags each sample with source: 1 or source: 2.
+// Accepts:
+//  - normal IMU samples (must include pitch) -> logged + WS broadcast
+//  - event messages (must include event) -> logged + WS broadcast
 //
-// Start (PowerShell):
-//   & "C:\Program Files\nodejs\node.exe" server.js
-//
-// Bridges:
-//   & "C:\Program Files\nodejs\node.exe" serial-bridge.js COM5 115200 localhost 8080 /imu
-//   & "C:\Program Files\nodejs\node.exe" serial-bridge.js COM6 115200 localhost 8080 /imu2
+// Endpoints:
+//   POST /imu  (source 1) -> telemetry.ndjson
+//   POST /imu2 (source 2) -> telemetry2.ndjson
 
 const http = require("http");
 const express = require("express");
@@ -25,24 +20,24 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "256kb" }));
 
-// ---- Telemetry files ----
 const TELEMETRY1_PATH = process.env.TELEMETRY1_PATH || path.join(__dirname, "telemetry.ndjson");
 const TELEMETRY2_PATH = process.env.TELEMETRY2_PATH || path.join(__dirname, "telemetry2.ndjson");
 
-// Optional: keep a little history in memory (for debugging)
 const MAX_BUFFER = Number(process.env.MAX_BUFFER || 2000);
 let history1 = [];
 let history2 = [];
 
-// Latest samples (for new WS clients + /latest endpoints)
 let latest1 = { pitch: 0, ts: Date.now(), source: 1 };
 let latest2 = { pitch: 0, ts: Date.now(), source: 2 };
 
-// ---- Helpers ----
 function toNum(v) {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
   return undefined;
+}
+
+function appendNdjson(filePath, obj) {
+  fs.appendFile(filePath, JSON.stringify(obj) + "\n", () => { });
 }
 
 function normalizeSample(body) {
@@ -52,6 +47,7 @@ function normalizeSample(body) {
   const ts = toNum(body?.ts) ?? Date.now();
 
   const sample = {
+    kind: "sample",
     ax: toNum(body?.ax),
     ay: toNum(body?.ay),
     az: toNum(body?.az),
@@ -60,14 +56,24 @@ function normalizeSample(body) {
     roll: toNum(body?.roll),
     a_mag: toNum(body?.a_mag),
     dpitch: toNum(body?.dpitch),
+    baseline_pitch: toNum(body?.baseline_pitch),
+    button: toNum(body?.button),
+    button_click: toNum(body?.button_click),
     ts,
   };
 
-  return { ok: true, sample };
+  return { ok: true, msg: sample };
 }
 
-function appendNdjson(filePath, obj) {
-  fs.appendFile(filePath, JSON.stringify(obj) + "\n", () => { });
+function normalizeEvent(body) {
+  const event = typeof body?.event === "string" ? body.event : undefined;
+  if (!event) return { ok: false, error: "event must be a string" };
+
+  // keep all fields, but make it explicit it's an event
+  const ts = toNum(body?.ts) ?? Date.now();
+  const msg = { ...body, kind: "event", ts };
+
+  return { ok: true, msg };
 }
 
 // ---- WebSocket server ----
@@ -82,54 +88,61 @@ function broadcast(obj) {
 }
 
 wss.on("connection", (ws) => {
-  // Send latest from both sensors immediately so client has state
   ws.send(JSON.stringify(latest1));
   ws.send(JSON.stringify(latest2));
 });
 
-// ---- HTTP endpoints ----
+// ---- shared handler ----
+function handleIncoming(reqBody, source, telemetryPath, historyArr, setLatest) {
+  // event path
+  if (typeof reqBody?.event === "string") {
+    const norm = normalizeEvent(reqBody);
+    if (!norm.ok) return { ok: false, status: 400, payload: norm };
 
-// Arduino #1 -> /imu -> telemetry.ndjson
+    const msg = { ...norm.msg, source };
+    appendNdjson(telemetryPath, msg);
+    broadcast(msg);
+
+    historyArr.push(msg);
+    if (historyArr.length > MAX_BUFFER) historyArr.shift();
+
+    // don't overwrite latest pitch sample with events
+    return { ok: true, status: 200, payload: { ok: true } };
+  }
+
+  // sample path
+  const norm = normalizeSample(reqBody);
+  if (!norm.ok) return { ok: false, status: 400, payload: norm };
+
+  const msg = { ...norm.msg, source };
+  setLatest(msg);
+
+  appendNdjson(telemetryPath, msg);
+  broadcast(msg);
+
+  historyArr.push(msg);
+  if (historyArr.length > MAX_BUFFER) historyArr.shift();
+
+  return { ok: true, status: 200, payload: { ok: true } };
+}
+
+// Arduino #1
 app.post("/imu", (req, res) => {
-  const norm = normalizeSample(req.body);
-  if (!norm.ok) return res.status(400).json(norm);
-
-  const sample = { ...norm.sample, source: 1 };
-  latest1 = sample;
-
-  history1.push(sample);
-  if (history1.length > MAX_BUFFER) history1.shift();
-
-  appendNdjson(TELEMETRY1_PATH, sample);
-  broadcast(sample);
-
-  res.json({ ok: true });
+  const out = handleIncoming(req.body, 1, TELEMETRY1_PATH, history1, (m) => (latest1 = m));
+  res.status(out.status).json(out.payload);
 });
 
-// Arduino #2 -> /imu2 -> telemetry2.ndjson
+// Arduino #2
 app.post("/imu2", (req, res) => {
-  const norm = normalizeSample(req.body);
-  if (!norm.ok) return res.status(400).json(norm);
-
-  const sample = { ...norm.sample, source: 2 };
-  latest2 = sample;
-
-  history2.push(sample);
-  if (history2.length > MAX_BUFFER) history2.shift();
-
-  appendNdjson(TELEMETRY2_PATH, sample);
-  broadcast(sample);
-
-  res.json({ ok: true });
+  const out = handleIncoming(req.body, 2, TELEMETRY2_PATH, history2, (m) => (latest2 = m));
+  res.status(out.status).json(out.payload);
 });
 
-// Debug helpers
 app.get("/latest1", (req, res) => res.json(latest1));
 app.get("/latest2", (req, res) => res.json(latest2));
 app.get("/history1", (req, res) => res.json(history1));
 app.get("/history2", (req, res) => res.json(history2));
 
-// Basic health check
 app.get("/", (req, res) => {
   res.send(
     `OK\nPOST /imu (source 1) -> ${path.basename(TELEMETRY1_PATH)}\nPOST /imu2 (source 2) -> ${path.basename(
@@ -138,7 +151,6 @@ app.get("/", (req, res) => {
   );
 });
 
-// ---- Start server ----
 server.listen(PORT, () => {
   console.log(`Backend listening on http://localhost:${PORT}`);
   console.log(`WebSocket on ws://localhost:${PORT}`);
