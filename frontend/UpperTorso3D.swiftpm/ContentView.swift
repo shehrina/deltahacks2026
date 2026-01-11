@@ -1,104 +1,153 @@
 import SwiftUI
 import SceneKit
 
+
 struct ContentView: View {
-    @State private var rotationX: Float = 0
-    @State private var rotationY: Float = 0
+    @StateObject private var postureVM = PostureViewModel()
+    // Sensor-driven model posture
+    @State private var sensorPitch: Float = 0  // Base pitch from sensor
+    @State private var sensorRoll: Float = 0   // Base roll from sensor
+    
+    // User gesture-driven model rotation (for 360 viewing)
+    @State private var dragRotationX: Float = 0  // Vertical drag offset
+    @State private var dragRotationY: Float = 0  // Horizontal drag offset
+
     @State private var zoom: CGFloat = 1.0
     @State private var lastDragValue: CGSize = .zero
     
+    // Final rotation values (combined sensor + drag)
+    private var modelRotationX: Float { sensorPitch + dragRotationX }
+    private var modelRotationY: Float { dragRotationY }
+    private var modelRotationZ: Float { sensorRoll }
+    
     var body: some View {
+        mainContent
+            .onAppear(perform: handleAppear)
+            .onDisappear(perform: handleDisappear)
+            .onChange(of: postureVM.upperPitch, perform: handlePitchChange)
+            .onChange(of: postureVM.upperRoll, perform: handleRollChange)
+    }
+    
+    private func handleAppear() {
+        postureVM.start()
+    }
+    
+    private func handleDisappear() {
+        postureVM.stop()
+    }
+    
+    private func handlePitchChange(_ pitch: Double) {
+        sensorPitch = Float(pitch * .pi / 180)
+    }
+    
+    private func handleRollChange(_ roll: Double) {
+        sensorRoll = Float(roll * .pi / 180)
+    }
+    
+    private var mainContent: some View {
         ZStack {
             // Neutral gray background
             Color(red: 0.55, green: 0.55, blue: 0.55)
                 .ignoresSafeArea()
             
             VStack(spacing: 0) {
-                // Header
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("PRESSUREPOINT")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.8))
-                            .tracking(4)
-                        Text("Welcome!")
-                            .font(.system(size: 28, weight: .thin))
-                            .foregroundColor(.white)
-                    }
-                    Spacer()
-                    
-                    // Reset button
-                    Button(action: {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-                            rotationX = 0
-                            rotationY = 0
-                            zoom = 1.0
-                        }
-                    }) {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 18, weight: .light))
-                            .foregroundColor(.white.opacity(0.7))
-                            .frame(width: 44, height: 44)
-                            .background(Color.white.opacity(0.15))
-                            .clipShape(Circle())
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 20)
-                .padding(.bottom, 10)
-                
-                // 3D Scene
-                TorsoSceneView(rotationX: $rotationX, rotationY: $rotationY, zoom: $zoom)
-                    .clipShape(RoundedRectangle(cornerRadius: 24))
-                    .padding(.horizontal, 16)
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                let deltaX = Float(value.translation.width - lastDragValue.width) * 0.01
-                                let deltaY = Float(value.translation.height - lastDragValue.height) * 0.01
-                                rotationY += deltaX
-                                rotationX += deltaY
-                                lastDragValue = value.translation
-                            }
-                            .onEnded { _ in
-                                lastDragValue = .zero
-                            }
-                    )
-                    .gesture(
-                        MagnificationGesture()
-                            .onChanged { value in
-                                zoom = min(max(value, 0.5), 2.5)
-                            }
-                    )
-                
-                // Controls
-                VStack(spacing: 16) {
-                    // Zoom slider
-                    HStack(spacing: 16) {
-                        Image(systemName: "minus.magnifyingglass")
-                            .foregroundColor(.white.opacity(0.6))
-                        
-                        Slider(value: $zoom, in: 0.5...2.5)
-                            .tint(.white)
-                        
-                        Image(systemName: "plus.magnifyingglass")
-                            .foregroundColor(.white.opacity(0.6))
-                    }
-                    .padding(.horizontal, 24)
-                    
-                    // Instructions
-                    Text("Drag to rotate • Pinch to zoom")
-                        .font(.system(size: 13, weight: .light, design: .rounded))
-                        .foregroundColor(.white.opacity(0.5))
-                }
-                .padding(.vertical, 16)
-                
-                // Insight Card
+                headerView
+                sceneView
+                controlsView
                 InsightCard()
                     .padding(.horizontal, 16)
                     .padding(.bottom, 20)
             }
         }
+    }
+    
+    private var headerView: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("PRESSUREPOINT")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.8))
+                    .tracking(4)
+                Text("Welcome!")
+                    .font(.system(size: 28, weight: .thin))
+                    .foregroundColor(.white)
+            }
+            Spacer()
+            
+            // Reset button
+            Button(action: {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
+                    dragRotationX = 0  // Reset drag rotations
+                    dragRotationY = 0
+                    zoom = 1.0
+                }
+            }) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundColor(.white.opacity(0.7))
+                    .frame(width: 44, height: 44)
+                    .background(Color.white.opacity(0.15))
+                    .clipShape(Circle())
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 20)
+        .padding(.bottom, 10)
+    }
+    
+    private var sceneView: some View {
+        TorsoSceneView(
+            modelRotationX: modelRotationX,
+            modelRotationY: modelRotationY,
+            modelRotationZ: modelRotationZ,
+            zoom: $zoom
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 24))
+        .padding(.horizontal, 16)
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    // Horizontal drag rotates model around Y axis (360 spin)
+                    let dx = Float(value.translation.width - lastDragValue.width) * 0.01
+                    // Vertical drag rotates model around X axis (tilt up/down)
+                    let dy = Float(value.translation.height - lastDragValue.height) * 0.01
+                    dragRotationY += dx
+                    dragRotationX += dy
+                    lastDragValue = value.translation
+                }
+                .onEnded { _ in
+                    lastDragValue = .zero
+                }
+        )
+        .gesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    zoom = min(max(value, 0.5), 2.5)
+                }
+        )
+    }
+    
+    private var controlsView: some View {
+        VStack(spacing: 16) {
+            // Zoom slider
+            HStack(spacing: 16) {
+                Image(systemName: "minus.magnifyingglass")
+                    .foregroundColor(.white.opacity(0.6))
+                
+                Slider(value: $zoom, in: 0.5...2.5)
+                    .tint(.white)
+                
+                Image(systemName: "plus.magnifyingglass")
+                    .foregroundColor(.white.opacity(0.6))
+            }
+            .padding(.horizontal, 24)
+            
+            // Instructions
+            Text("Drag to rotate • Pinch to zoom")
+                .font(.system(size: 13, weight: .light, design: .rounded))
+                .foregroundColor(.white.opacity(0.5))
+        }
+        .padding(.vertical, 16)
     }
 }
 
@@ -134,8 +183,9 @@ struct InsightCard: View {
 
 // MARK: - 3D Scene View
 struct TorsoSceneView: UIViewRepresentable {
-    @Binding var rotationX: Float
-    @Binding var rotationY: Float
+    var modelRotationX: Float  // Pitch (sensor + drag)
+    var modelRotationY: Float  // Yaw (drag)
+    var modelRotationZ: Float  // Roll (sensor)
     @Binding var zoom: CGFloat
     
     func makeUIView(context: Context) -> SCNView {
@@ -150,10 +200,12 @@ struct TorsoSceneView: UIViewRepresentable {
     }
     
     func updateUIView(_ uiView: SCNView, context: Context) {
+        // Apply all rotations to the model
         if let modelNode = uiView.scene?.rootNode.childNode(withName: "model", recursively: false) {
-            modelNode.eulerAngles = SCNVector3(rotationX, rotationY, 0)
+            modelNode.eulerAngles = SCNVector3(modelRotationX, modelRotationY, modelRotationZ)
         }
-        
+
+        // Camera stays fixed, only zoom changes
         if let cameraNode = uiView.scene?.rootNode.childNode(withName: "camera", recursively: false) {
             cameraNode.position.z = Float(2.5 / zoom)
         }

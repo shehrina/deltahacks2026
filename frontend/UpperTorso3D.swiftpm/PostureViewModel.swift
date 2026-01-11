@@ -5,6 +5,7 @@ final class PostureViewModel: ObservableObject {
 
     // Sensor-driven posture
     @Published var upperPitch: Double = 0
+    @Published var upperRoll: Double = 0
     @Published var lowerPitch: Double = 0
 
     // Events
@@ -33,12 +34,15 @@ final class PostureViewModel: ObservableObject {
             return
         }
 
-        // Samples
-        guard msg.kind == "sample",
-              let pitch = msg.pitch else { return }
+        // Samples - prefer pitch_smooth over pitch if available
+        guard msg.kind == "sample" else { return }
+        
+        let pitch = msg.pitch_smooth ?? msg.pitch ?? 0
+        let roll = msg.roll ?? 0
 
         if msg.source == 1 {
             upperPitch = pitch
+            upperRoll = roll
         } else if msg.source == 2 {
             lowerPitch = pitch
         }
